@@ -197,6 +197,27 @@
     }
     .back-link:hover{ background: rgba(127,127,127,0.2); }
 
+    .cheat-btn{
+      position:fixed; bottom:20px; right:20px; z-index:4;
+      padding:10px 20px; border-radius:8px;
+      background: rgba(255,180,0,0.12);
+      border:1px solid rgba(255,180,0,0.35);
+      color: var(--hud-strong);
+      font:600 12px/1 system-ui, sans-serif;
+      cursor:pointer; user-select:none;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .cheat-btn:hover{ background: rgba(255,180,0,0.25); }
+    .cheat-btn.active{
+      background: rgba(255,80,80,0.2);
+      border-color: rgba(255,80,80,0.5);
+      animation: cheatPulse 1s infinite;
+    }
+    @keyframes cheatPulse{
+      0%,100%{ box-shadow: 0 0 0 0 rgba(255,180,0,0); }
+      50%{ box-shadow: 0 0 12px 2px rgba(255,180,0,0.3); }
+    }
+
     .win-overlay{
       display:none; position:fixed; inset:0; z-index:10;
       background:rgba(0,0,0,0.7); backdrop-filter:blur(8px);
@@ -256,11 +277,17 @@
   </div>
 
   <a href="index.html" class="back-link">Back</a>
+  <button class="cheat-btn" id="btnCheat">CHEAT</button>
 
   <div class="win-overlay" id="winOverlay">
-    <h1>Escaped!</h1>
+    <h1>CONGRATULATIONS!</h1>
     <p id="winMsg">All agents escaped in 0:00</p>
-    <button onclick="restartGame()">Play Again</button>
+    <p style="font-size:22px; color:rgba(255,220,80,0.9); margin:0 0 6px;">You have been awarded a <b>PhD in Swarm Herding</b></p>
+    <p style="font-size:14px; color:rgba(255,255,255,0.5); margin:0 0 24px;">
+      Your dissertation "On the Art of Pushing Tiny Dots Through a Maze" has been accepted unanimously.<br>
+      Please collect your degree from the mouth on the right. Goodbye and good luck, Doctor.
+    </p>
+    <button onclick="restartGame()">Play Again (Pursue Post-Doc)</button>
   </div>
 
   <canvas id="game-canvas"></canvas>
@@ -287,13 +314,13 @@
     const canvas = document.getElementById('game-canvas');
     const ctx = canvas.getContext('2d');
 
-    const AGENT_COUNT = 200;
+    const AGENT_COUNT = 100;
     const AGENT_R = 3;
     const ATT_DIST = 50;
     const ATT_F = 0.014;
     const MAX_SPD = 4;
     const DAMP = 0.96;
-    const WIN_THRESHOLD = 180;
+    const WIN_THRESHOLD = 100;
     const MAZE_SCALE = 0.64;
 
     // Cursor attraction
@@ -333,6 +360,14 @@
 
     // Maze bounds (for magnet grid clipping)
     let mazeLeft, mazeTop, mazeRight, mazeBottom;
+
+    // Cheat auto-pilot
+    let cheatActive = false;
+    let cheatWaypoints = [];
+    let cheatWpIndex = 0;
+    let cheatDwellTime = 0;
+    const CHEAT_DWELL = 2.5; // seconds to wait at each waypoint to gather agents
+    const CHEAT_CURSOR_SPEED = 2.5; // pixels per frame
 
     // Object physics constants
     const OBJ_DAMP = 0.94;
@@ -479,6 +514,90 @@
       mazeObjects.push(mkObj((col2 + col3) / 2, mTop_ + mH * 0.6, objR + 5));
       mazeObjects.push(mkObj(col3 + (mRight_ - col3) * 0.5, mTop_ + mH * 0.35, objR + 8));
       mazeObjects.push(mkObj((mLeft_ + col1) / 2, mTop_ + mH * 0.35, objR - 6));
+
+      // Build cheat waypoints through the maze corridors
+      // col1 wall: top to mH*0.55 → gap at bottom
+      // col2 wall: mH*0.35 to bottom → gap at top
+      // col3 wall: top to mH*0.5 → gap at bottom
+      const entryMidY = entryY + gateH / 2;
+      const exitMidY = exitY + gateH / 2;
+      cheatWaypoints = [
+        // 1. Gather at spawn
+        { x: mLeft_ + 80, y: entryMidY },
+        // 2. Move down to bottom gap of col1
+        { x: (mLeft_ + col1) / 2, y: mTop_ + mH * 0.78 },
+        // 3. Through col1 gap
+        { x: col1 + wallT + 30, y: mTop_ + mH * 0.78 },
+        // 4. Move up to top gap of col2
+        { x: (col1 + col2) / 2, y: mTop_ + mH * 0.18 },
+        // 5. Through col2 gap
+        { x: col2 + wallT + 30, y: mTop_ + mH * 0.18 },
+        // 6. Move down to bottom gap of col3
+        { x: (col2 + col3) / 2, y: mTop_ + mH * 0.72 },
+        // 7. Through col3 gap
+        { x: col3 + wallT + 30, y: mTop_ + mH * 0.72 },
+        // 8. Navigate to exit height
+        { x: col3 + (mRight_ - col3) * 0.5, y: exitMidY },
+        // 9. Push to exit
+        { x: mRight_ + 40, y: exitMidY },
+      ];
+    }
+
+    /* ===== Cheat button ===== */
+    document.getElementById('btnCheat').addEventListener('click', () => {
+      cheatActive = !cheatActive;
+      document.getElementById('btnCheat').classList.toggle('active', cheatActive);
+      document.getElementById('btnCheat').textContent = cheatActive ? 'DUMB AUTO-PILOT ON' : 'CHEAT';
+      if (cheatActive) {
+        cheatWpIndex = 0;
+        cheatDwellTime = 0;
+      }
+    });
+
+    function updateCheatAutoPilot() {
+      if (!cheatActive || gameWon) return;
+      if (cheatWpIndex >= cheatWaypoints.length) {
+        // Done — loop back to last waypoint to keep pushing stragglers
+        cheatWpIndex = cheatWaypoints.length - 1;
+        return;
+      }
+
+      const wp = cheatWaypoints[cheatWpIndex];
+      const dx = wp.x - cursorX;
+      const dy = wp.y - cursorY;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+
+      if (dist > 10) {
+        // Move cursor directly toward waypoint (no magnet snapping)
+        const speed = CHEAT_CURSOR_SPEED;
+        cursorX += (dx / dist) * speed;
+        cursorY += (dy / dist) * speed;
+        cheatDwellTime = 0;
+      } else {
+        // Arrived at waypoint — dwell to gather agents
+        cheatDwellTime += 0.016;
+
+        // Check how many agents are nearby
+        let nearCursor = 0;
+        for (const p of particles) {
+          if (p.escaped) continue;
+          const pdx = p.x - cursorX, pdy = p.y - cursorY;
+          if (pdx * pdx + pdy * pdy < CURSOR_RANGE * CURSOR_RANGE) nearCursor++;
+        }
+        const agentsAlive = particles.filter(p => !p.escaped).length;
+        const gatherRatio = agentsAlive > 0 ? nearCursor / agentsAlive : 1;
+
+        // Move on if: enough dwell time OR most agents gathered
+        const isLastWp = cheatWpIndex === cheatWaypoints.length - 1;
+        const minDwell = isLastWp ? 0.5 : CHEAT_DWELL;
+        if (cheatDwellTime > minDwell || gatherRatio > 0.6) {
+          cheatWpIndex++;
+          cheatDwellTime = 0;
+        }
+      }
+
+      // Dynamically adjust repulsion for better herding
+      SEP_F = 0.35;
     }
 
     /* ===== Particles ===== */
@@ -621,6 +740,12 @@
       if (k){
         if (!keys[k]){
           keys[k] = true;
+          // Manual input disables cheat
+          if (cheatActive && (k === 'w' || k === 'a' || k === 's' || k === 'd')) {
+            cheatActive = false;
+            document.getElementById('btnCheat').classList.remove('active');
+            document.getElementById('btnCheat').textContent = 'CHEAT';
+          }
           // Discrete cursor movement on key press
           if (k === 'w' || k === 'a' || k === 's' || k === 'd'){
             moveCursor(k);
@@ -700,6 +825,9 @@
       // Held WASD repeat
       checkHeldKeys();
 
+      // Cheat auto-pilot
+      updateCheatAutoPilot();
+
       // Particle physics
       for (let i = 0; i < particles.length; i++){
         const p = particles[i];
@@ -777,10 +905,12 @@
       // Win
       if (escaped >= WIN_THRESHOLD){
         gameWon = true;
+        cheatActive = false;
         const mins = Math.floor(gameTime / 60);
         const secs = Math.floor(gameTime % 60);
+        const timeStr = `${mins}:${secs.toString().padStart(2,'0')}`;
         document.getElementById('winMsg').textContent =
-          `${escaped} agents escaped in ${mins}:${secs.toString().padStart(2,'0')}`;
+          `${escaped} agents fed to the mouth in ${timeStr}. The committee is impressed.`;
         document.getElementById('winOverlay').classList.add('show');
       }
     }
@@ -803,31 +933,210 @@
       ctx.fillStyle = grad;
       ctx.fillRect(x0, zone.y, x1-x0, zone.h);
 
-      const pulse = 0.4 + Math.sin(gameTime * 3) * 0.15;
-      ctx.strokeStyle = `rgba(${rgbStr},${pulse})`;
-      ctx.lineWidth = 1.5;
-      ctx.setLineDash([4,4]);
-      ctx.beginPath();
-      ctx.moveTo(zone.x, zone.y); ctx.lineTo(zone.x, zone.y + zone.h);
-      ctx.stroke();
-      ctx.setLineDash([]);
+      if (!isExit) {
+        // START zone: simple dashed line + label
+        const pulse = 0.4 + Math.sin(gameTime * 3) * 0.15;
+        ctx.strokeStyle = `rgba(${rgbStr},${pulse})`;
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([4,4]);
+        ctx.beginPath();
+        ctx.moveTo(zone.x, zone.y); ctx.lineTo(zone.x, zone.y + zone.h);
+        ctx.stroke();
+        ctx.setLineDash([]);
 
-      ctx.font = '600 12px system-ui, sans-serif';
-      ctx.fillStyle = `rgba(${rgbStr},0.7)`;
-      ctx.textAlign = 'center';
-      ctx.fillText(label, isExit ? zone.x + zone.w/2 : zone.x, zone.y - 10);
+        ctx.font = '600 12px system-ui, sans-serif';
+        ctx.fillStyle = `rgba(${rgbStr},0.7)`;
+        ctx.textAlign = 'center';
+        ctx.fillText(label, zone.x, zone.y - 10);
 
-      ctx.strokeStyle = `rgba(${rgbStr},${pulse})`;
-      ctx.lineWidth = 2;
-      const arrowX = isExit ? zone.x + 20 : zone.x - 20;
-      const arrowY = zone.y + zone.h / 2;
-      ctx.beginPath();
-      if (isExit){
-        ctx.moveTo(arrowX, arrowY-8); ctx.lineTo(arrowX+10, arrowY); ctx.lineTo(arrowX, arrowY+8);
-      } else {
+        ctx.strokeStyle = `rgba(${rgbStr},${pulse})`;
+        ctx.lineWidth = 2;
+        const arrowX = zone.x - 20;
+        const arrowY = zone.y + zone.h / 2;
+        ctx.beginPath();
         ctx.moveTo(arrowX, arrowY-8); ctx.lineTo(arrowX-10, arrowY); ctx.lineTo(arrowX, arrowY+8);
+        ctx.stroke();
       }
+    }
+
+    /* ===== Animated mouth at right edge exit ===== */
+    function drawExitMouth(){
+      if (!exitZone) return;
+      const C = getColors();
+      const isDark = html.getAttribute('data-theme') === 'dark';
+
+      const mouthCenterY = exitZone.y + exitZone.h / 2;
+      const mouthH = exitZone.h * 1.3;
+      const mouthX = W; // right edge of screen
+
+      // Count nearby agents to make mouth react
+      let nearbyCount = 0;
+      for (const p of particles) {
+        if (p.escaped) continue;
+        if (p.x > exitZone.x - 60 && p.y > exitZone.y - 20 && p.y < exitZone.y + exitZone.h + 20) {
+          nearbyCount++;
+        }
+      }
+      const excitement = Math.min(nearbyCount / 15, 1);
+
+      // Mouth open/close animation
+      const baseOpen = 0.6 + excitement * 0.3;
+      const chompCycle = Math.sin(gameTime * (2 + excitement * 3)) * 0.5 + 0.5;
+      const openAmount = baseOpen + chompCycle * 0.15 * (1 + excitement);
+      const halfGap = (mouthH / 2) * openAmount;
+
+      // Lip color
+      const lipR = isDark ? 255 : 200;
+      const lipG = isDark ? 80 + Math.floor(excitement * 100) : 40;
+      const lipB = isDark ? 100 : 60;
+      const lipAlpha = 0.6 + excitement * 0.3;
+
+      ctx.save();
+
+      // Throat/inside glow
+      const throatGrad = ctx.createRadialGradient(
+        mouthX + 10, mouthCenterY, 5,
+        mouthX - 50, mouthCenterY, mouthH * 0.7
+      );
+      throatGrad.addColorStop(0, `rgba(${isDark ? '255,50,30' : '180,20,10'},${0.3 + excitement * 0.3})`);
+      throatGrad.addColorStop(0.5, `rgba(${isDark ? '200,30,50' : '140,15,20'},${0.15 + excitement * 0.15})`);
+      throatGrad.addColorStop(1, `rgba(${isDark ? '100,10,30' : '80,5,15'},0)`);
+      ctx.fillStyle = throatGrad;
+      ctx.beginPath();
+      ctx.moveTo(mouthX + 5, mouthCenterY - halfGap);
+      ctx.quadraticCurveTo(mouthX - 50, mouthCenterY - halfGap * 0.6, mouthX - 70, mouthCenterY);
+      ctx.quadraticCurveTo(mouthX - 50, mouthCenterY + halfGap * 0.6, mouthX + 5, mouthCenterY + halfGap);
+      ctx.closePath();
+      ctx.fill();
+
+      // Tongue (wiggly, inside mouth)
+      const tongueWiggle = Math.sin(gameTime * 3.5) * 8 * (0.5 + excitement * 0.5);
+      const tongueLen = 30 + excitement * 20;
+      const tongueGrad = ctx.createLinearGradient(mouthX - tongueLen, mouthCenterY, mouthX, mouthCenterY);
+      tongueGrad.addColorStop(0, `rgba(${isDark ? '255,90,110' : '220,60,70'},${0.5 + excitement * 0.3})`);
+      tongueGrad.addColorStop(1, `rgba(${isDark ? '255,60,80' : '200,40,50'},${0.2})`);
+      ctx.fillStyle = tongueGrad;
+      ctx.beginPath();
+      ctx.moveTo(mouthX + 5, mouthCenterY - 6);
+      ctx.quadraticCurveTo(
+        mouthX - tongueLen * 0.5, mouthCenterY + tongueWiggle - 4,
+        mouthX - tongueLen, mouthCenterY + tongueWiggle
+      );
+      ctx.quadraticCurveTo(
+        mouthX - tongueLen * 0.5, mouthCenterY + tongueWiggle + 4,
+        mouthX + 5, mouthCenterY + 6
+      );
+      ctx.closePath();
+      ctx.fill();
+
+      // Upper lip
+      ctx.beginPath();
+      ctx.moveTo(mouthX + 5, mouthCenterY - halfGap - 12);
+      ctx.quadraticCurveTo(mouthX - 30, mouthCenterY - halfGap - 18, mouthX - 65, mouthCenterY - halfGap + 5);
+      ctx.quadraticCurveTo(mouthX - 80, mouthCenterY - halfGap + 15, mouthX - 85, mouthCenterY);
+      ctx.quadraticCurveTo(mouthX - 80, mouthCenterY - halfGap + 5, mouthX - 60, mouthCenterY - halfGap - 5);
+      ctx.quadraticCurveTo(mouthX - 25, mouthCenterY - halfGap - 8, mouthX + 5, mouthCenterY - halfGap + 2);
+      ctx.closePath();
+      ctx.fillStyle = `rgba(${lipR},${lipG},${lipB},${lipAlpha})`;
+      ctx.fill();
+      ctx.strokeStyle = `rgba(${lipR},${lipG},${lipB},${lipAlpha * 0.7})`;
+      ctx.lineWidth = 1.5;
       ctx.stroke();
+
+      // Lower lip
+      ctx.beginPath();
+      ctx.moveTo(mouthX + 5, mouthCenterY + halfGap + 12);
+      ctx.quadraticCurveTo(mouthX - 30, mouthCenterY + halfGap + 18, mouthX - 65, mouthCenterY + halfGap - 5);
+      ctx.quadraticCurveTo(mouthX - 80, mouthCenterY + halfGap - 15, mouthX - 85, mouthCenterY);
+      ctx.quadraticCurveTo(mouthX - 80, mouthCenterY + halfGap - 5, mouthX - 60, mouthCenterY + halfGap + 5);
+      ctx.quadraticCurveTo(mouthX - 25, mouthCenterY + halfGap + 8, mouthX + 5, mouthCenterY + halfGap - 2);
+      ctx.closePath();
+      ctx.fillStyle = `rgba(${lipR},${lipG},${lipB},${lipAlpha})`;
+      ctx.fill();
+      ctx.strokeStyle = `rgba(${lipR},${lipG},${lipB},${lipAlpha * 0.7})`;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+
+      // Teeth (upper)
+      const teethCount = 5;
+      const teethSpacing = (halfGap * 0.3);
+      const toothW = 10;
+      const toothH = 10 + excitement * 5;
+      ctx.fillStyle = isDark ? `rgba(255,255,255,${0.7 + excitement * 0.2})` : `rgba(240,240,230,${0.8 + excitement * 0.15})`;
+      for (let i = 0; i < teethCount; i++){
+        const tx = mouthX - 12 - i * 13;
+        const ty = mouthCenterY - halfGap + 2;
+        ctx.beginPath();
+        ctx.moveTo(tx - toothW/2, ty);
+        ctx.lineTo(tx, ty + toothH);
+        ctx.lineTo(tx + toothW/2, ty);
+        ctx.closePath();
+        ctx.fill();
+      }
+
+      // Teeth (lower)
+      for (let i = 0; i < teethCount; i++){
+        const tx = mouthX - 18 - i * 13;
+        const ty = mouthCenterY + halfGap - 2;
+        ctx.beginPath();
+        ctx.moveTo(tx - toothW/2, ty);
+        ctx.lineTo(tx, ty - toothH);
+        ctx.lineTo(tx + toothW/2, ty);
+        ctx.closePath();
+        ctx.fill();
+      }
+
+      // Eyes above the mouth
+      const eyeY = mouthCenterY - halfGap - 35;
+      const eyeSpacing = 28;
+      for (let side = -1; side <= 1; side += 2) {
+        const eyeX = mouthX - 35 + side * eyeSpacing;
+        // Eye white
+        ctx.beginPath();
+        ctx.ellipse(eyeX, eyeY, 12, 9, 0, 0, Math.PI * 2);
+        ctx.fillStyle = isDark ? 'rgba(255,255,255,0.85)' : 'rgba(240,240,240,0.9)';
+        ctx.fill();
+        ctx.strokeStyle = `rgba(${lipR},${lipG},${lipB},0.5)`;
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        // Pupil - looks at nearest agent cluster
+        let lookX = 0, lookY = 0;
+        if (nearbyCount > 0) {
+          // Look toward the agents
+          lookX = -2 - excitement * 3;
+          lookY = Math.sin(gameTime * 2) * 2;
+        } else {
+          // Lazy looking around
+          lookX = Math.sin(gameTime * 0.8) * 4;
+          lookY = Math.cos(gameTime * 1.1) * 2;
+        }
+        ctx.beginPath();
+        ctx.arc(eyeX + lookX, eyeY + lookY, 4 + excitement * 1.5, 0, Math.PI * 2);
+        ctx.fillStyle = isDark ? 'rgba(20,20,20,0.9)' : 'rgba(30,30,30,0.85)';
+        ctx.fill();
+        // Highlight
+        ctx.beginPath();
+        ctx.arc(eyeX + lookX + 1.5, eyeY + lookY - 1.5, 1.5, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(255,255,255,0.8)';
+        ctx.fill();
+      }
+
+      // "GOAL!" label with bounce
+      const labelBounce = Math.sin(gameTime * 2.5) * 3;
+      ctx.font = `800 ${14 + Math.floor(excitement * 4)}px system-ui, sans-serif`;
+      ctx.fillStyle = `rgba(${C.exitRgb},${0.6 + excitement * 0.3})`;
+      ctx.textAlign = 'center';
+      ctx.fillText('GOAL!', mouthX - 45, eyeY - 22 + labelBounce);
+
+      // Eating counter
+      if (escaped > 0) {
+        ctx.font = '600 11px system-ui, sans-serif';
+        ctx.fillStyle = `rgba(${C.exitRgb},0.6)`;
+        ctx.fillText(`NOM x${escaped}`, mouthX - 45, mouthCenterY + halfGap + 35);
+      }
+
+      ctx.restore();
     }
 
     function draw(){
@@ -877,6 +1186,9 @@
       if (startZone) drawZoneGlow(startZone, C.startRgb, 'START');
       if (exitZone) drawZoneGlow(exitZone, C.exitRgb, 'EXIT');
 
+      // Animated mouth at exit
+      drawExitMouth();
+
       // Walls
       for (const w of walls){
         ctx.fillStyle = C.wallFill;
@@ -901,6 +1213,39 @@
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText(`m=${obj.mass}`, obj.x, obj.y);
+      }
+
+      // Cheat waypoint trail
+      if (cheatActive && cheatWaypoints.length > 0) {
+        // Draw path line
+        ctx.beginPath();
+        ctx.moveTo(cursorX, cursorY);
+        for (let i = cheatWpIndex; i < cheatWaypoints.length; i++) {
+          ctx.lineTo(cheatWaypoints[i].x, cheatWaypoints[i].y);
+        }
+        ctx.strokeStyle = `rgba(255,180,0,${0.15 + Math.sin(gameTime * 3) * 0.05})`;
+        ctx.lineWidth = 2;
+        ctx.setLineDash([8, 6]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Draw waypoint dots
+        for (let i = cheatWpIndex; i < cheatWaypoints.length; i++) {
+          const wp = cheatWaypoints[i];
+          const isCurrent = i === cheatWpIndex;
+          ctx.beginPath();
+          ctx.arc(wp.x, wp.y, isCurrent ? 6 : 4, 0, Math.PI * 2);
+          ctx.fillStyle = isCurrent
+            ? `rgba(255,200,0,${0.5 + Math.sin(gameTime * 4) * 0.3})`
+            : 'rgba(255,180,0,0.2)';
+          ctx.fill();
+        }
+
+        // "AUTO-PILOT" label near cursor
+        ctx.font = '700 10px system-ui, sans-serif';
+        ctx.fillStyle = `rgba(255,180,0,${0.5 + Math.sin(gameTime * 3) * 0.2})`;
+        ctx.textAlign = 'center';
+        ctx.fillText('AUTO-PILOT', cursorX, cursorY - CURSOR_RANGE - 8);
       }
 
       // Cursor
@@ -963,6 +1308,11 @@
 
     function restartGame(){
       SEP_F = 0.5;
+      cheatActive = false;
+      cheatWpIndex = 0;
+      cheatDwellTime = 0;
+      document.getElementById('btnCheat').classList.remove('active');
+      document.getElementById('btnCheat').textContent = 'CHEAT';
       buildMaze();
       buildMagnets();
       resetParticles();
