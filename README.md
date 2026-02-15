@@ -170,7 +170,7 @@ This produces a layout that matches the natural packing density of a uniform mag
 Every frame, each electromagnet counts how many microrobots are within its detection radius:
 
 $$
-c_m = \left| \left\{ i \ :\ (x_i - x_m)^2 + (y_i - y_m)^2 < R_d^2 \right\} \right|
+c_m = \lvert \{ i : (x_i - x_m)^2 + (y_i - y_m)^2 < R_d^2 \} \rvert
 $$
 
 | Symbol | Value | Meaning |
