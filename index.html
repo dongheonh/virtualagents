@@ -254,6 +254,8 @@
     const DETECT_R2 = DETECT_R * DETECT_R;
     const DENSITY_MAX = 14;
     const DENSITY_THRESHOLD = 5;
+    const GROUP_THRESHOLD = 34;
+    const GROUP_MERGE_DIST = MAG_SX * 1.6;
     let magnets = [];
 
     // --- Physics params ---
@@ -462,6 +464,93 @@
         ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
         ctx.fillStyle = `rgba(${C.particle},0.65)`;
         ctx.fill();
+      }
+
+      // 4) Group detection & swarm outline
+      const hotMagnets = [];
+      for (let m = 0; m < magnets.length; m++) {
+        if (magnets[m]._c >= GROUP_THRESHOLD) hotMagnets.push(magnets[m]);
+      }
+
+      const visited = new Set();
+      const clusters = [];
+      for (let i = 0; i < hotMagnets.length; i++) {
+        if (visited.has(i)) continue;
+        const cluster = [hotMagnets[i]];
+        visited.add(i);
+        const stack = [i];
+        while (stack.length) {
+          const ci = stack.pop();
+          for (let j = 0; j < hotMagnets.length; j++) {
+            if (visited.has(j)) continue;
+            const dx = hotMagnets[ci].x - hotMagnets[j].x;
+            const dy = hotMagnets[ci].y - hotMagnets[j].y;
+            if (dx*dx + dy*dy < GROUP_MERGE_DIST * GROUP_MERGE_DIST) {
+              visited.add(j);
+              cluster.push(hotMagnets[j]);
+              stack.push(j);
+            }
+          }
+        }
+        if (cluster.length >= 2) clusters.push(cluster);
+      }
+
+      for (const cluster of clusters) {
+        const groupPts = [];
+        for (let i = 0; i < particles.length; i++) {
+          const p = particles[i];
+          for (const mg of cluster) {
+            const dx = p.x - mg.x, dy = p.y - mg.y;
+            if (dx*dx + dy*dy < DETECT_R2) { groupPts.push(p); break; }
+          }
+        }
+        if (groupPts.length < 3) continue;
+
+        // Convex hull (Andrew's monotone chain)
+        const pts = groupPts.map(p => [p.x, p.y]).sort((a,b) => a[0]-b[0] || a[1]-b[1]);
+        const cross = (O,A,B) => (A[0]-O[0])*(B[1]-O[1]) - (A[1]-O[1])*(B[0]-O[0]);
+        const lower = [];
+        for (const p of pts) { while (lower.length >= 2 && cross(lower[lower.length-2], lower[lower.length-1], p) <= 0) lower.pop(); lower.push(p); }
+        const upper = [];
+        for (let i = pts.length-1; i >= 0; i--) { const p = pts[i]; while (upper.length >= 2 && cross(upper[upper.length-2], upper[upper.length-1], p) <= 0) upper.pop(); upper.push(p); }
+        lower.pop(); upper.pop();
+        const hull = lower.concat(upper);
+        if (hull.length < 3) continue;
+
+        // Expand hull outward
+        const PAD = 18;
+        let cx = 0, cy = 0;
+        for (const h of hull) { cx += h[0]; cy += h[1]; }
+        cx /= hull.length; cy /= hull.length;
+        const expanded = hull.map(h => {
+          const dx = h[0] - cx, dy = h[1] - cy;
+          const d = Math.sqrt(dx*dx + dy*dy) || 1;
+          return [h[0] + dx/d * PAD, h[1] + dy/d * PAD];
+        });
+
+        // Draw smooth dashed outline
+        ctx.beginPath();
+        ctx.moveTo(expanded[0][0], expanded[0][1]);
+        for (let i = 0; i < expanded.length; i++) {
+          const curr = expanded[i];
+          const next = expanded[(i+1) % expanded.length];
+          const mx = (curr[0] + next[0]) / 2, my = (curr[1] + next[1]) / 2;
+          ctx.quadraticCurveTo(curr[0], curr[1], mx, my);
+        }
+        ctx.closePath();
+        ctx.strokeStyle = `rgba(${C.magOn},0.55)`;
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([6, 4]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // "Swarm" label at top of hull
+        ctx.font = '500 11px system-ui, -apple-system, sans-serif';
+        ctx.fillStyle = `rgba(${C.magOn},0.7)`;
+        let topY = Infinity, topX = 0;
+        for (const h of expanded) { if (h[1] < topY) { topY = h[1]; topX = h[0]; } }
+        ctx.textAlign = 'center';
+        ctx.fillText('Swarm', topX, topY - 8);
       }
 
       requestAnimationFrame(drawFrame);
