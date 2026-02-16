@@ -415,6 +415,10 @@
       <div class="m-row"><span class="m-label"><i>γ</i> damping</span><span class="m-val" id="mGamma">0.96</span></div>
       <input id="sDamp" type="range" min="0.80" max="1.00" step="0.005" value="0.96">
     </div>
+    <div class="m-slider">
+      <div class="m-row"><span class="m-label"><i>F<sub>ρ</sub></i> density force</span><span class="m-val" id="mDensF">0.00</span></div>
+      <input id="sDensF" type="range" min="-1.0" max="1.0" step="0.01" value="0.0">
+    </div>
     <div class="m-sep"></div>
     <h4>Order Parameters</h4>
     <div class="m-row">
@@ -626,10 +630,13 @@
     const sPhase  = document.getElementById('sPhase');
     const sSigma  = document.getElementById('sSigma');
     const sDamp   = document.getElementById('sDamp');
+    const sDensF  = document.getElementById('sDensF');
 
     let ATT_F = parseFloat(sAtt.value);
     let PHASE_K = parseFloat(sPhase.value);
     let DAMP = parseFloat(sDamp.value);
+    let DENS_FORCE = parseFloat(sDensF.value);
+    const DENS_RANGE = 80; // how far a density-activated magnet affects particles
     const MAX_SPD = 4;
 
     window.addEventListener('mousemove', e => { mouseX = e.clientX; mouseY = e.clientY; });
@@ -724,6 +731,7 @@
       sSep.value = sSigma.value; // sync left panel
       updateLabels();
     });
+    sDensF.addEventListener('input', () => { DENS_FORCE = parseFloat(sDensF.value); });
 
     // ===== Theme-aware colors for canvas (cached) =====
     let colorCache = null, lastTheme = '';
@@ -815,6 +823,22 @@
             if (dd < 1 || dd > DANCE_MAG_RANGE) continue;
             const falloff = 1 - dd / DANCE_MAG_RANGE;
             const ff = mg._dance * DANCE_STRENGTH * falloff * 0.6;
+            p.vx += (dmx/dd) * ff;
+            p.vy += (dmy/dd) * ff;
+          }
+        }
+
+        // Density-based electromagnetic force: magnets with high particle density push/pull
+        if (DENS_FORCE !== 0) {
+          for (let m = 0; m < magnets.length; m++) {
+            const mg = magnets[m];
+            if (mg._c < DENSITY_THRESHOLD) continue;
+            const dmx = mg.x - p.x, dmy = mg.y - p.y;
+            const dd = Math.sqrt(dmx*dmx + dmy*dmy);
+            if (dd < 1 || dd > DENS_RANGE) continue;
+            const density = Math.min((mg._c - DENSITY_THRESHOLD) / (DENSITY_MAX - DENSITY_THRESHOLD), 1);
+            const falloff = 1 - dd / DENS_RANGE;
+            const ff = DENS_FORCE * density * falloff * 0.5;
             p.vx += (dmx/dd) * ff;
             p.vy += (dmy/dd) * ff;
           }
@@ -1101,6 +1125,7 @@
       document.getElementById('mK').textContent = PHASE_K.toFixed(4);
       document.getElementById('mSigma').textContent = SEP_F.toFixed(3);
       document.getElementById('mGamma').textContent = DAMP.toFixed(3);
+      document.getElementById('mDensF').textContent = DENS_FORCE.toFixed(2);
       document.getElementById('mPsi').textContent = psi.toFixed(3);
       document.getElementById('mPsiBar').style.width = (psi * 100) + '%';
       document.getElementById('mSpeed').textContent = avgSpd.toFixed(2);
